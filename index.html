@@ -216,25 +216,45 @@ function send(text) {
   return writeChain;
 }
 
+let connStep = "";
+function errText(e) {
+  if (!e) return "unknown";
+  const parts = [e.name, e.code, e.message].filter(x => x !== undefined && x !== null && x !== "");
+  return parts.length ? parts.join(" / ") : String(e);
+}
 $("btnConn").onclick = async () => {
   if (connected) { wantConnected = false; try { dev.gatt.disconnect(); } catch (e) {} return; }
   try {
-    dev = await navigator.bluetooth.requestDevice({filters: [{services: [SVC]}, {namePrefix: "RF-Survey-"}], optionalServices: [SVC]});
+    connStep = "finding the board";
+    try {
+      dev = await navigator.bluetooth.requestDevice({filters: [{services: [SVC]}], optionalServices: [SVC]});
+    } catch (e1) {
+      if (e1 && e1.name === "NotFoundError") throw e1;
+      // some iOS Web-BLE browsers reject service filters: fall back to "show all devices"
+      connStep = "finding the board (all devices)";
+      msg("Pick the device named RF-Survey-XXXX from the list.");
+      dev = await navigator.bluetooth.requestDevice({acceptAllDevices: true, optionalServices: [SVC]});
+    }
     dev.addEventListener("gattserverdisconnected", onDisconnected);
     wantConnected = true;
     startGps(); keepAwake();
     await connectGatt();
   } catch (e) {
-    if (e && e.name !== "NotFoundError") msg("Connect failed: " + (e.message || e));
+    if (e && e.name === "NotFoundError") { msg("No device chosen. Tap Connect and pick RF-Survey-XXXX."); return; }
+    msg("Connect failed while " + connStep + ": " + errText(e));
   }
 };
 
 async function connectGatt() {
   setConn("connecting…");
+  connStep = "connecting to " + (dev.name || "the board");
   const server = await dev.gatt.connect();
+  connStep = "opening the survey service (wrong device or old firmware?)";
   const svc = await server.getPrimaryService(SVC);
+  connStep = "reading the board's channels";
   cmdChr = await svc.getCharacteristic(CMD);
   const stat = await svc.getCharacteristic(STAT), spec = await svc.getCharacteristic(SPEC);
+  connStep = "starting live updates";
   stat.addEventListener("characteristicvaluechanged", e => onStat(new TextDecoder().decode(e.target.value)));
   spec.addEventListener("characteristicvaluechanged", e => onSpec(new Uint8Array(e.target.value.buffer.slice(e.target.value.byteOffset, e.target.value.byteOffset + e.target.value.byteLength))));
   await stat.startNotifications(); await spec.startNotifications();
@@ -254,7 +274,7 @@ async function reconnect() {
   if (reconnecting || connected || !dev || !wantConnected) return;
   reconnecting = true; setConn("reconnecting…");
   for (let i = 0; i < 20 && wantConnected && !connected; i++) {
-    try { await connectGatt(); break; } catch (e) { await new Promise(r => setTimeout(r, 3000)); }
+    try { await connectGatt(); break; } catch (e) { msg("Reconnect failed while " + connStep + ": " + errText(e)); await new Promise(r => setTimeout(r, 3000)); }
   }
   reconnecting = false;
   if (!connected) setConn("disconnected (tap Connect)");
