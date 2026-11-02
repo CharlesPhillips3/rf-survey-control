@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>RF Survey Control · 902–928 MHz</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+:root{--bg:#0e1116;--panel:#161b22;--line:#2a313c;--text:#e6edf3;--mute:#8b949e;--accent:#4c9aff;--ok:#3fb950;--bad:#f85149;--warn:#d29922}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif}
+main{max-width:720px;margin:0 auto;padding:10px 10px 40px}
+header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:2px 0 10px}
+h1{font-size:17px;margin:0}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--bad);margin-right:6px;vertical-align:middle}
+.dot.on{background:var(--ok)}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:10px;margin-bottom:10px}
+button{background:var(--accent);color:#fff;border:0;border-radius:10px;padding:10px 14px;font:inherit;font-weight:600}
+button.ghost{background:#1f2630;color:var(--text);border:1px solid var(--line)}
+button:disabled{opacity:.4}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.tile{background:#1f2630;border-radius:8px;padding:6px 7px;min-width:0}
+.tile span{display:block;font-size:10.5px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile b{font-size:17px;font-variant-numeric:tabular-nums;white-space:nowrap}
+#map{height:300px;border-radius:10px;background:#0b0e13}
+canvas{display:block;width:100%;height:120px;border-radius:8px;background:#0b0e13}
+.go{width:100%;font-size:24px;padding:18px;background:#2ea043;border-radius:12px}
+.go.run{background:#d29922}
+input[type=text]{width:100%;font-size:16px;padding:10px;border-radius:10px;border:1px solid var(--line);background:#0e1116;color:var(--text);margin-bottom:8px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.small{font-size:12px;color:var(--mute)}
+.msg{font-size:13px;color:var(--mute);min-height:18px;margin-top:6px}
+.warn{background:rgba(210,153,34,.12);border:1px solid rgba(210,153,34,.45);border-radius:10px;padding:10px;font-size:13px;margin-bottom:10px}
+.bad{background:rgba(248,81,73,.12);border:1px solid rgba(248,81,73,.45)}
+table{width:100%;border-collapse:collapse;font-size:13px;font-variant-numeric:tabular-nums}
+td,th{padding:5px 4px;border-bottom:1px solid var(--line);text-align:left}
+th{color:var(--mute);font-weight:600;font-size:11px}
+.hidden{display:none}
+.legend{background:rgba(14,17,22,.85);color:#e6edf3;padding:6px 8px;border-radius:6px;font:11px sans-serif;line-height:1.5}
+.stn-ico{border:2px solid #111;border-radius:5px;font:bold 11px sans-serif;text-align:center;line-height:18px;color:#0b0e13}
+</style></head>
+<body><main>
+<header>
+  <h1><span class="dot" id="dot"></span>RF Survey · 902–928</h1>
+  <button id="btnConn">Connect</button>
+</header>
+
+<div id="envWarn" class="warn bad hidden"></div>
+<div id="keepAwake" class="warn hidden">Keep this screen <b>open and on</b> while surveying. Positions stop if the phone locks or you switch apps. Tip: Settings → Display &amp; Brightness → Auto-Lock → <b>Never</b> during the drive, and use a dash mount.</div>
+
+<div class="card">
+  <div class="tiles">
+    <div class="tile"><span>Floor P20</span><b id="vFloor">–</b></div>
+    <div class="tile"><span>Median</span><b id="vMed">–</b></div>
+    <div class="tile"><span>Peak</span><b id="vPeak">–</b></div>
+    <div class="tile"><span>Busy ch</span><b id="vBusy">–</b></div>
+    <div class="tile"><span>GPS</span><b id="vGps">–</b></div>
+    <div class="tile"><span>Board pos</span><b id="vPos">–</b></div>
+    <div class="tile"><span>Logged</span><b id="vRows">–</b></div>
+    <div class="tile"><span>Storage</span><b id="vFs">–</b></div>
+  </div>
+</div>
+
+<div class="card">
+  <input type="text" id="label" placeholder="Station label (optional), e.g. Main St & 1st Ave NE">
+  <button class="go" id="btnGo" disabled>GO · baseline</button>
+  <div class="msg" id="goMsg">Park, then tap GO. Keep still until the countdown ends.</div>
+  <div class="row" style="margin-top:6px">
+    <button class="ghost" id="btnMark" disabled>Mark spot</button>
+    <button class="ghost" id="btnFollow">Follow: on</button>
+  </div>
+</div>
+
+<div class="card" style="padding:6px"><div id="map"></div></div>
+
+<div class="card">
+  <div class="small" style="margin-bottom:4px">Spectrum (last 2 s) · 902–928 MHz · dashed = floor</div>
+  <canvas id="spec"></canvas>
+</div>
+
+<div class="card" id="stnCard">
+  <div class="small" style="margin-bottom:4px">GO stations this session</div>
+  <table><thead><tr><th>#</th><th>Label</th><th>Time</th><th>Floor</th><th>Median</th><th>Peak</th><th>Busy</th></tr></thead><tbody id="stnRows"><tr><td colspan="7" class="small">None yet</td></tr></tbody></table>
+</div>
+
+<div class="card">
+  <div class="small" style="margin-bottom:6px">Session · <span id="sessInfo">empty</span></div>
+  <div class="row">
+    <button id="btnSave">Save CSV</button>
+    <button class="ghost" id="btnNew">New session</button>
+    <button class="ghost" id="btnWifi" disabled>Board Wi-Fi</button>
+    <button class="ghost" id="btnLog" disabled>Pause logging</button>
+  </div>
+  <div class="msg" id="saveMsg">Save CSV makes a file you can open in the RF Survey Viewer. The board also keeps its own full copy (download it over the board's Wi-Fi at 192.168.4.1).</div>
+</div>
+
+<div class="small">The receiver only listens; it never transmits. This page sends your phone's location only to the board over Bluetooth.</div>
+</main>
+
+<script>
+"use strict";
+const SVC = "8a1c0001-5b2f-4c1e-9a6d-2f0b6e3c9d10";
+const CMD = "8a1c0002-5b2f-4c1e-9a6d-2f0b6e3c9d10";
+const STAT = "8a1c0003-5b2f-4c1e-9a6d-2f0b6e3c9d10";
+const SPEC = "8a1c0004-5b2f-4c1e-9a6d-2f0b6e3c9d10";
+const N = 130, F0 = 902.1, STEP = 0.2;
+const FREQS = Array.from({length: N}, (_, i) => +(F0 + STEP*i).toFixed(1));
+const $ = id => document.getElementById(id);
+
+// ---------------------------------------------------------------- state
+let dev = null, cmdChr = null, connected = false, wantConnected = false;
+let st = null;                 // last status from board
+let pos = null;                // last phone fix {lat, lon, acc, alt, t}
+let lastPosSent = 0, watchId = null, wakeLock = null, follow = true;
+let S = loadSession();         // {boot, windows:[], stations:[], marks:[]}
+let pendingSpec = null;        // last window spectrum (dBm[])
+let stnStartLocal = null;      // {t0, id, label}
+
+// ---------------------------------------------------------------- env checks
+if (!navigator.bluetooth) {
+  $("envWarn").classList.remove("hidden");
+  $("envWarn").innerHTML = /iPhone|iPad/.test(navigator.userAgent)
+    ? "<b>Open this page in the Bluefy app.</b> Safari on iPhone can't use Bluetooth. Install <b>Bluefy – Web BLE Browser</b> (free) from the App Store, then open this same address in it."
+    : "<b>This browser has no Web Bluetooth.</b> On iPhone use the Bluefy app; on Android or a computer use Chrome.";
+  $("btnConn").disabled = true;
+}
+
+// ---------------------------------------------------------------- map
+const map = L.map("map", {zoomControl: true}).setView([39.8, -98.6], 4);
+L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {maxZoom: 19, attribution: "&copy; OpenStreetMap"}).addTo(map);
+const trackLayer = L.layerGroup().addTo(map), stnLayer = L.layerGroup().addTo(map), markLayer = L.layerGroup().addTo(map);
+const me = L.circleMarker([0, 0], {radius: 7, color: "#fff", weight: 2, fillColor: "#4c9aff", fillOpacity: 1});
+const meAcc = L.circle([0, 0], {radius: 10, color: "#4c9aff", weight: 1, fillOpacity: .08});
+let meShown = false;
+const legend = L.control({position: "bottomright"});
+legend.onAdd = () => { const d = L.DomUtil.create("div", "legend"); d.id = "legend"; return d; };
+legend.addTo(map);
+
+function colour(v) {
+  const fl = S.windows.map(w => w.f).sort((a, b) => a - b);
+  let lo = -120, hi = -105;
+  if (fl.length >= 10) { lo = fl[Math.floor(.05*(fl.length-1))]; hi = Math.max(lo + 3, fl[Math.floor(.95*(fl.length-1))]); }
+  const k = Math.max(0, Math.min(1, (v - lo)/(hi - lo)));
+  const stops = [[46,160,67],[210,153,34],[248,81,73]], s = k < .5 ? 0 : 1, kk = k < .5 ? k*2 : (k-.5)*2;
+  const c = stops[s].map((x, i) => Math.round(x + (stops[s+1][i] - x)*kk));
+  $("legend").innerHTML = `Floor P20<br><span style="color:#2ea043">●</span> ${lo.toFixed(1)} quiet<br><span style="color:#f85149">●</span> ${hi.toFixed(1)} noisy`;
+  return `rgb(${c[0]},${c[1]},${c[2]})`;
+}
+function redrawMap() {
+  trackLayer.clearLayers(); stnLayer.clearLayers(); markLayer.clearLayers();
+  for (const w of S.windows) if (w.lat != null) addTrackDot(w);
+  for (const s of S.stations) if (s.lat != null) addStnMarker(s);
+  for (const m of S.marks) if (m.lat != null) L.marker([m.lat, m.lon]).bindPopup("MARK " + esc(m.note || "")).addTo(markLayer);
+}
+function addTrackDot(w) {
+  const c = colour(w.f);
+  L.circleMarker([w.lat, w.lon], {radius: 5, color: c, fillColor: c, fillOpacity: .9, weight: 0})
+    .bindPopup(`${new Date(w.t).toLocaleTimeString()}<br>Floor ${w.f.toFixed(1)} · Med ${w.m.toFixed(1)}<br>Peak ${w.p.toFixed(1)} @ ${w.pf.toFixed(1)} MHz · busy ${w.b}`).addTo(trackLayer);
+}
+function addStnMarker(s) {
+  const c = colour(s.f);
+  L.marker([s.lat, s.lon], {icon: L.divIcon({className: "", iconSize: [44, 22], iconAnchor: [22, 11],
+    html: `<div class="stn-ico" style="background:${c}">${s.f.toFixed(1)}</div>`})})
+    .bindPopup(`<b>Station ${s.id}</b> ${esc(s.label || "")}<br>${new Date(s.t0).toLocaleTimeString()} · ${s.d} s<br>Floor ${s.f.toFixed(1)} · Med ${s.m.toFixed(1)}<br>Peak ${s.p.toFixed(1)} @ ${s.pf.toFixed(1)} MHz · busy ${s.b}`).addTo(stnLayer);
+}
+$("btnFollow").onclick = () => { follow = !follow; $("btnFollow").textContent = "Follow: " + (follow ? "on" : "off"); };
+map.on("dragstart", () => { follow = false; $("btnFollow").textContent = "Follow: off"; });
+
+// ---------------------------------------------------------------- GPS (phone)
+function startGps() {
+  if (watchId != null || !navigator.geolocation) return;
+  watchId = navigator.geolocation.watchPosition(p => {
+    pos = {lat: p.coords.latitude, lon: p.coords.longitude, acc: p.coords.accuracy || 0, alt: p.coords.altitude || 0, t: Date.now()};
+    $("vGps").textContent = "±" + Math.round(pos.acc) + " m";
+    const ll = [pos.lat, pos.lon];
+    me.setLatLng(ll); meAcc.setLatLng(ll).setRadius(pos.acc);
+    if (!meShown) { me.addTo(map); meAcc.addTo(map); meShown = true; map.setView(ll, 15); }
+    else if (follow) map.panTo(ll, {animate: true});
+    if (connected && Date.now() - lastPosSent > 900) {
+      lastPosSent = Date.now();
+      send(`P${pos.lat.toFixed(7)},${pos.lon.toFixed(7)},${pos.acc.toFixed(0)},${pos.alt.toFixed(1)}`);
+    }
+  }, e => {
+    $("vGps").textContent = "off";
+    $("envWarn").classList.remove("hidden");
+    $("envWarn").innerHTML = "<b>Location is blocked.</b> Allow location for Bluefy: iPhone Settings → Privacy &amp; Security → Location Services → Bluefy → <b>While Using</b>, and turn on <b>Precise Location</b>. Then reload this page.";
+  }, {enableHighAccuracy: true, maximumAge: 0, timeout: 20000});
+}
+// resend the latest fix every 2 s even if the phone hasn't moved
+setInterval(() => {
+  if (connected && pos && Date.now() - pos.t < 15000 && Date.now() - lastPosSent > 1800) {
+    lastPosSent = Date.now();
+    send(`P${pos.lat.toFixed(7)},${pos.lon.toFixed(7)},${pos.acc.toFixed(0)},${pos.alt.toFixed(1)}`);
+  }
+}, 1000);
+
+async function keepAwake() {
+  try { if ("wakeLock" in navigator) { wakeLock = await navigator.wakeLock.request("screen"); } } catch (e) {}
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && wantConnected) { keepAwake(); if (!connected) reconnect(); } });
+
+// ---------------------------------------------------------------- Bluetooth
+let writeChain = Promise.resolve();
+function send(text) {
+  if (!cmdChr) return Promise.resolve();
+  const data = new TextEncoder().encode(text.slice(0, 150));
+  writeChain = writeChain.then(async () => {
+    try {
+      if (cmdChr.writeValueWithoutResponse) await cmdChr.writeValueWithoutResponse(data);
+      else await cmdChr.writeValue(data);
+    } catch (e) {
+      try { await cmdChr.writeValue(data); } catch (e2) {}
+    }
+  });
+  return writeChain;
+}
+
+$("btnConn").onclick = async () => {
+  if (connected) { wantConnected = false; try { dev.gatt.disconnect(); } catch (e) {} return; }
+  try {
+    dev = await navigator.bluetooth.requestDevice({filters: [{services: [SVC]}, {namePrefix: "RF-Survey-"}], optionalServices: [SVC]});
+    dev.addEventListener("gattserverdisconnected", onDisconnected);
+    wantConnected = true;
+    startGps(); keepAwake();
+    await connectGatt();
+  } catch (e) {
+    if (e && e.name !== "NotFoundError") msg("Connect failed: " + (e.message || e));
+  }
+};
+
+async function connectGatt() {
+  setConn("connecting…");
+  const server = await dev.gatt.connect();
+  const svc = await server.getPrimaryService(SVC);
+  cmdChr = await svc.getCharacteristic(CMD);
+  const stat = await svc.getCharacteristic(STAT), spec = await svc.getCharacteristic(SPEC);
+  stat.addEventListener("characteristicvaluechanged", e => onStat(new TextDecoder().decode(e.target.value)));
+  spec.addEventListener("characteristicvaluechanged", e => onSpec(new Uint8Array(e.target.value.buffer.slice(e.target.value.byteOffset, e.target.value.byteOffset + e.target.value.byteLength))));
+  await stat.startNotifications(); await spec.startNotifications();
+  connected = true; setConn(dev.name || "connected");
+  await send("T" + Date.now());
+  if (pos) { lastPosSent = Date.now(); await send(`P${pos.lat.toFixed(7)},${pos.lon.toFixed(7)},${pos.acc.toFixed(0)},${pos.alt.toFixed(1)}`); }
+  ["btnGo", "btnMark", "btnWifi", "btnLog"].forEach(b => $(b).disabled = false);
+  $("keepAwake").classList.remove("hidden");
+}
+function onDisconnected() {
+  connected = false; cmdChr = null; setConn("disconnected");
+  ["btnGo", "btnMark", "btnWifi", "btnLog"].forEach(b => $(b).disabled = true);
+  if (wantConnected) setTimeout(reconnect, 1500);
+}
+let reconnecting = false;
+async function reconnect() {
+  if (reconnecting || connected || !dev || !wantConnected) return;
+  reconnecting = true; setConn("reconnecting…");
+  for (let i = 0; i < 20 && wantConnected && !connected; i++) {
+    try { await connectGatt(); break; } catch (e) { await new Promise(r => setTimeout(r, 3000)); }
+  }
+  reconnecting = false;
+  if (!connected) setConn("disconnected (tap Connect)");
+}
+function setConn(t) {
+  $("dot").classList.toggle("on", connected);
+  $("btnConn").textContent = connected ? "Disconnect" : "Connect";
+  msg(t === "connected" || t === (dev && dev.name) ? "Connected to " + t : t);
+}
+function msg(t) { $("goMsg").textContent = t; }
+
+// ---------------------------------------------------------------- incoming
+function onStat(txt) {
+  let j; try { j = JSON.parse(txt); } catch (e) { return; }
+  if (j.t === "s") {
+    st = j;
+    if (S.boot == null) S.boot = j.bt;
+    $("vFloor").textContent = j.f.toFixed(1); $("vMed").textContent = j.m.toFixed(1);
+    $("vPeak").textContent = j.p.toFixed(1); $("vBusy").textContent = j.b + "/" + N;
+    $("vPos").innerHTML = j.pa < 0 ? '<span style="color:#f85149">none</span>' : j.pa <= 5 ? '<span style="color:#3fb950">live</span>' : `<span style="color:#d29922">${j.pa}s old</span>`;
+    $("vRows").textContent = j.r; $("vFs").textContent = j.fs < 0 ? "err" : j.fs + "%";
+    $("btnLog").textContent = j.lg ? "Pause logging" : "Resume logging";
+    $("btnWifi").textContent = j.w ? "Board Wi-Fi: on" : "Board Wi-Fi: off";
+    updateGo();
+    // record a window (spectrum arrives right after the status)
+    const w = {t: Date.now(), f: j.f, m: j.m, p: j.p, pf: j.pf, b: j.b, spec: null};
+    if (pos && Date.now() - pos.t < 10000) { w.lat = pos.lat; w.lon = pos.lon; w.alt = pos.alt; w.acc = pos.acc; }
+    S.windows.push(w);
+    if (w.lat != null) addTrackDot(w);
+    saveSessionSoon(); sessInfo();
+  } else if (j.t === "st") {
+    const t1 = Date.now(), t0 = t1 - j.d*1000;
+    const near = S.windows.filter(w => w.lat != null && w.t >= t0 - 3000 && w.t <= t1 + 3000);
+    const med = a => { const b = [...a].sort((x, y) => x - y); return b[b.length >> 1]; };
+    const lbl = stnStartLocal && Math.abs(stnStartLocal.t - t0) < 15000 ? stnStartLocal.label : "";
+    const s = {id: j.id, label: lbl || "", t0, t1, d: j.d,
+               f: j.f, m: j.m, p: j.p, pf: j.pf, b: j.b, sw: j.sw, e: j.e, mean: null,
+               lat: near.length ? med(near.map(w => w.lat)) : (pos ? pos.lat : null),
+               lon: near.length ? med(near.map(w => w.lon)) : (pos ? pos.lon : null)};
+    S.stations = S.stations.filter(x => x.id !== s.id).concat([s]);
+    if (s.lat != null) addStnMarker(s);
+    renderStations(); saveSessionSoon(); sessInfo();
+    msg(`Station ${s.id} saved: floor ${s.f.toFixed(1)} dBm, median ${s.m.toFixed(1)}, busy ${s.b}${s.e ? " (stopped early)" : ""}`);
+    if (navigator.vibrate) navigator.vibrate(200);
+  }
+}
+function onSpec(b) {
+  if (b.length < 2 + N) return;
+  const v = Array.from(b.slice(2, 2 + N), x => x/2 - 160);
+  if (b[0] === 0) {
+    const w = S.windows[S.windows.length - 1];
+    if (w && !w.spec && Date.now() - w.t < 3000) w.spec = v;
+    drawSpec(v);
+  } else if (b[0] === 1) {
+    const s = S.stations.find(x => x.id % 256 === b[1]);
+    if (s) { s.mean = v; saveSessionSoon(); }
+  }
+}
+
+// ---------------------------------------------------------------- GO / mark / misc
+$("btnGo").onclick = async () => {
+  if (st && st.sa) { await send("G"); msg("Stopping and saving…"); return; }
+  const label = $("label").value.trim();
+  stnStartLocal = {label, t: Date.now()};
+  await send("G" + label);
+  $("label").value = "";
+  localTick = {end: Date.now() + (st ? st.sn : 60)*1000};
+  updateGo(true);
+  msg("Baseline running. Keep still.");
+};
+let localTick = null;
+function updateGo(starting) {
+  const b = $("btnGo");
+  const running = starting || (st && st.sa);
+  if (st && st.sa) localTick = {end: Date.now() + st.sl*1000};
+  if (running) {
+    const left = localTick ? Math.max(0, Math.round((localTick.end - Date.now())/1000)) : (st ? st.sl : 0);
+    b.textContent = `STOP & SAVE · ${left} s left`; b.className = "go run";
+  } else { b.textContent = `GO · ${st ? st.sn : 60} s baseline`; b.className = "go"; localTick = null; }
+}
+setInterval(() => { if (localTick) updateGo(); }, 1000);
+
+$("btnMark").onclick = async () => {
+  const note = $("label").value.trim();
+  await send("M" + note); $("label").value = "";
+  if (pos) { S.marks.push({t: Date.now(), lat: pos.lat, lon: pos.lon, note}); L.marker([pos.lat, pos.lon]).bindPopup("MARK " + esc(note)).addTo(markLayer); saveSessionSoon(); }
+  msg("Spot marked.");
+};
+$("btnLog").onclick = () => send(st && st.lg ? "L0" : "L1");
+$("btnWifi").onclick = () => send(st && st.w ? "W0" : "W1");
+
+// ---------------------------------------------------------------- spectrum chart
+function drawSpec(v) {
+  const c = $("spec"), dpr = window.devicePixelRatio || 1, w = c.clientWidth, h = c.clientHeight;
+  c.width = w*dpr; c.height = h*dpr; const g = c.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const lo = -130, hi = -50, Y = x => h - 14 - (Math.max(lo, Math.min(hi, x)) - lo)/(hi - lo)*(h - 20);
+  g.fillStyle = "#8b949e"; g.font = "10px sans-serif"; g.strokeStyle = "#232a33";
+  for (let d = -120; d <= -60; d += 20) { g.beginPath(); g.moveTo(28, Y(d)); g.lineTo(w, Y(d)); g.stroke(); g.fillText(d, 0, Y(d) + 3); }
+  const fl = st ? st.f : -120, bw = (w - 30)/N;
+  v.forEach((x, i) => { g.fillStyle = x > fl + 10 ? "#e8a33d" : "#2f9e8f"; g.fillRect(29 + i*bw, Y(x), Math.max(1, bw - .4), h - 14 - Y(x)); });
+  g.strokeStyle = "#f85149"; g.setLineDash([4, 4]); g.beginPath(); g.moveTo(28, Y(fl)); g.lineTo(w, Y(fl)); g.stroke(); g.setLineDash([]);
+  g.fillStyle = "#8b949e"; g.fillText("902", 29, h - 2); g.fillText("915", 29 + (w - 30)/2 - 8, h - 2); g.fillText("928", w - 18, h - 2);
+}
+
+// ---------------------------------------------------------------- stations table
+function renderStations() {
+  const rows = S.stations.slice().sort((a, b) => a.id - b.id);
+  $("stnRows").innerHTML = rows.length ? rows.map(s => `<tr><td>${s.id}</td><td>${esc(s.label || "—")}</td><td>${new Date(s.t0).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}</td><td><b style="color:${colour(s.f)}">${s.f.toFixed(1)}</b></td><td>${s.m.toFixed(1)}</td><td>${s.p.toFixed(1)}</td><td>${s.b}</td></tr>`).join("")
+    : '<tr><td colspan="7" class="small">None yet</td></tr>';
+}
+
+// ---------------------------------------------------------------- session storage
+function emptySession() { return {v: 1, boot: null, started: Date.now(), windows: [], stations: [], marks: []}; }
+function loadSession() {
+  try {
+    const t = localStorage.getItem("rfsurvey.session");
+    if (t) { const s = JSON.parse(t); for (const w of s.windows) if (typeof w.spec === "string") w.spec = unpack(w.spec);
+      for (const x of s.stations) if (typeof x.mean === "string") x.mean = unpack(x.mean); return s; }
+  } catch (e) {}
+  return emptySession();
+}
+function pack(v) { return v ? btoa(String.fromCharCode(...v.map(x => Math.max(0, Math.min(255, Math.round((x + 160)*2)))))) : null; }
+function unpack(s) { return s ? Array.from(atob(s), ch => ch.charCodeAt(0)/2 - 160) : null; }
+let saveTimer = null;
+function saveSessionNow() {
+  clearTimeout(saveTimer); saveTimer = null;
+  try {
+    const out = {...S, windows: S.windows.map(w => ({...w, spec: pack(w.spec)})), stations: S.stations.map(x => ({...x, mean: pack(x.mean)}))};
+    localStorage.setItem("rfsurvey.session", JSON.stringify(out));
+  } catch (e) { $("saveMsg").textContent = "Phone storage is full. Save the CSV and start a new session."; }
+}
+function saveSessionSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(saveSessionNow, 1500); }
+window.addEventListener("pagehide", saveSessionNow);
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveSessionNow(); });
+function sessInfo() {
+  const placed = S.windows.filter(w => w.lat != null).length;
+  $("sessInfo").textContent = S.windows.length ? `${S.windows.length} readings (${placed} with position), ${S.stations.length} stations, started ${new Date(S.started).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})}` : "empty";
+}
+$("btnNew").onclick = () => {
+  if (S.windows.length && !confirm("Start a new session? Save the CSV first if you need it.")) return;
+  S = emptySession(); saveSessionSoon(); redrawMap(); renderStations(); sessInfo();
+};
+
+// ---------------------------------------------------------------- CSV export (same format as the board's log)
+function buildCsv() {
+  const boot = S.boot == null ? 0 : S.boot;
+  const L = ["#RFSURVEY,v1", "boot,millis,utc_ms,lat,lon,alt_m,sats,hdop,sweeps,floor_p20_dbm,median_dbm,peak_dbm,peak_mhz,busy," + FREQS.map(f => "f" + f.toFixed(1)).join(","),
+             `#CONFIG,${boot},start=902.100,step=0.200,n=130,source=bluefy-page`];
+  if (S.windows.length) L.push(`#SYNC,${boot},0,${S.windows[0].t},phone`);
+  for (const w of S.windows) {
+    if (!w.spec) continue;
+    L.push([boot, 0, w.t, w.lat != null ? w.lat.toFixed(7) : "", w.lon != null ? w.lon.toFixed(7) : "", w.alt != null ? w.alt.toFixed(1) : "", "", "",
+            "", w.f.toFixed(1), w.m.toFixed(1), w.p.toFixed(1), w.pf.toFixed(1), w.b].concat(w.spec.map(x => x.toFixed(1))).join(","));
+  }
+  for (const m of S.marks) L.push(`#MARK,${boot},0,${m.t},${(m.note || "").replace(/,/g, ";")}`);
+  for (const s of S.stations) {
+    L.push(`#STATION,${boot},${s.id},0,${s.d*1000},${s.t0},${s.t1},${s.sw},${s.f.toFixed(1)},${s.m.toFixed(1)},${s.p.toFixed(1)},${s.pf.toFixed(1)},${s.b},${s.e ? 1 : 0},${(s.label || "").replace(/,/g, ";")}`);
+    if (s.mean) L.push(`#STATION_MEAN,${boot},${s.id},` + s.mean.map(x => x.toFixed(1)).join(","));
+  }
+  return L.join("\n") + "\n";
+}
+$("btnSave").onclick = async () => {
+  if (!S.windows.length) { $("saveMsg").textContent = "Nothing recorded yet."; return; }
+  const name = `rfsurvey_${new Date(S.started).toISOString().slice(0, 16).replace(/[:T]/g, "-")}.csv`;
+  const csv = buildCsv(), file = new File([csv], name, {type: "text/csv"});
+  try {
+    if (navigator.canShare && navigator.canShare({files: [file]})) { await navigator.share({files: [file], title: name}); $("saveMsg").textContent = "Shared " + name + ". Choose “Save to Files”."; return; }
+  } catch (e) { if (e && e.name === "AbortError") return; }
+  try {
+    const a = document.createElement("a"); a.href = URL.createObjectURL(file); a.download = name; document.body.appendChild(a); a.click(); a.remove();
+    $("saveMsg").textContent = "Download started: " + name + ". If nothing happened, use the board's Wi-Fi page (192.168.4.1 → Download CSV) instead.";
+  } catch (e) { $("saveMsg").textContent = "This browser couldn't save the file. Use the board's Wi-Fi page (192.168.4.1 → Download CSV) instead."; }
+};
+
+function esc(s) { return String(s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c])); }
+
+// ---------------------------------------------------------------- start
+redrawMap(); renderStations(); sessInfo();
+if (S.windows.length) { const last = S.windows.filter(w => w.lat != null).pop(); if (last) map.setView([last.lat, last.lon], 14); }
+if (navigator.geolocation && navigator.bluetooth) startGps();
+</script>
+</body></html>
