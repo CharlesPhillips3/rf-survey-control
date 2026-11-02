@@ -19,6 +19,7 @@ h1{font-size:17px;margin:0}
 button{background:var(--accent);color:#fff;border:0;border-radius:10px;padding:10px 14px;font:inherit;font-weight:600}
 button.ghost{background:#1f2630;color:var(--text);border:1px solid var(--line)}
 button:disabled{opacity:.4}
+button.danger{background:#8e2b2b}
 .tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
 .tile{background:#1f2630;border-radius:8px;padding:6px 7px;min-width:0}
 .tile span{display:block;font-size:10.5px;color:var(--mute);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -91,6 +92,8 @@ th{color:var(--mute);font-weight:600;font-size:11px}
     <button class="ghost" id="btnNew">New session</button>
     <button class="ghost" id="btnWifi" disabled>Board Wi-Fi</button>
     <button class="ghost" id="btnLog" disabled>Pause logging</button>
+    <button class="ghost" id="btnRadio" disabled>Sleep radio</button>
+    <button class="danger" id="btnErase" disabled>Erase board storage</button>
   </div>
   <div class="msg" id="saveMsg">Save CSV makes a file you can open in the RF Survey Viewer. The board also keeps its own full copy (download it over the board's Wi-Fi at 192.168.4.1).</div>
 </div>
@@ -261,12 +264,12 @@ async function connectGatt() {
   connected = true; setConn(dev.name || "connected");
   await send("T" + Date.now());
   if (pos) { lastPosSent = Date.now(); await send(`P${pos.lat.toFixed(7)},${pos.lon.toFixed(7)},${pos.acc.toFixed(0)},${pos.alt.toFixed(1)}`); }
-  ["btnGo", "btnMark", "btnWifi", "btnLog"].forEach(b => $(b).disabled = false);
+  ["btnGo", "btnMark", "btnWifi", "btnLog", "btnRadio", "btnErase"].forEach(b => $(b).disabled = false);
   $("keepAwake").classList.remove("hidden");
 }
 function onDisconnected() {
   connected = false; cmdChr = null; setConn("disconnected");
-  ["btnGo", "btnMark", "btnWifi", "btnLog"].forEach(b => $(b).disabled = true);
+  ["btnGo", "btnMark", "btnWifi", "btnLog", "btnRadio", "btnErase"].forEach(b => $(b).disabled = true);
   if (wantConnected) setTimeout(reconnect, 1500);
 }
 let reconnecting = false;
@@ -298,7 +301,11 @@ function onStat(txt) {
     $("vRows").textContent = j.r; $("vFs").textContent = j.fs < 0 ? "err" : j.fs + "%";
     $("btnLog").textContent = j.lg ? "Pause logging" : "Resume logging";
     $("btnWifi").textContent = j.w ? "Board Wi-Fi: on" : "Board Wi-Fi: off";
+    $("btnRadio").textContent = j.rs ? "Wake radio" : "Sleep radio";
+    $("btnGo").disabled = !!j.rs;
+    if (j.rs) { $("vFloor").textContent = "asleep"; $("vMed").textContent = "–"; $("vPeak").textContent = "–"; $("vBusy").textContent = "–"; }
     updateGo();
+    if (j.rs) return;   // radio asleep: nothing measured, nothing recorded
     // record a window (spectrum arrives right after the status)
     const w = {t: Date.now(), f: j.f, m: j.m, p: j.p, pf: j.pf, b: j.b, spec: null};
     if (pos && Date.now() - pos.t < 10000) { w.lat = pos.lat; w.lon = pos.lon; w.alt = pos.alt; w.acc = pos.acc; }
@@ -365,6 +372,12 @@ $("btnMark").onclick = async () => {
 };
 $("btnLog").onclick = () => send(st && st.lg ? "L0" : "L1");
 $("btnWifi").onclick = () => send(st && st.w ? "W0" : "W1");
+$("btnRadio").onclick = () => { const sleeping = st && st.rs; send(sleeping ? "Z0" : "Z1"); msg(sleeping ? "Waking the radio…" : "Radio going to sleep. Readings stop until you wake it."); };
+$("btnErase").onclick = async () => {
+  if (!confirm("Erase ALL survey data stored on the board?\n\nSave or download anything you need first. This can't be undone.")) return;
+  await send("ERASE");
+  $("saveMsg").textContent = "Board storage erased. (This page's session is kept; use New session to clear it too.)";
+};
 
 // ---------------------------------------------------------------- spectrum chart
 function drawSpec(v) {
