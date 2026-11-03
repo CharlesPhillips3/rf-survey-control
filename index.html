@@ -58,8 +58,8 @@ th{color:var(--mute);font-weight:600;font-size:11px}
     <div class="tile"><span>Busy ch</span><b id="vBusy">–</b></div>
     <div class="tile"><span>GPS</span><b id="vGps">–</b></div>
     <div class="tile"><span>Board pos</span><b id="vPos">–</b></div>
-    <div class="tile"><span>Logged</span><b id="vRows">–</b></div>
-    <div class="tile"><span>Storage</span><b id="vFs">–</b></div>
+    <div class="tile"><span>Battery</span><b id="vBatt">–</b></div>
+    <div class="tile"><span>Storage · rows</span><b id="vFs">–</b></div>
   </div>
 </div>
 
@@ -288,6 +288,13 @@ function setConn(t) {
   msg(t === "connected" || t === (dev && dev.name) ? "Connected to " + t : t);
 }
 function msg(t) { $("goMsg").textContent = t; }
+function battPct(v) {   // LiPo voltage -> %, same table as the board
+  if (v < 2.5) return -1;
+  const V = [3.30, 3.50, 3.60, 3.70, 3.80, 3.90, 4.00, 4.10, 4.20], P = [0, 5, 15, 30, 50, 65, 80, 90, 100];
+  if (v <= V[0]) return 0;
+  for (let i = 1; i < V.length; i++) if (v <= V[i]) return Math.round(P[i-1] + (v - V[i-1])/(V[i] - V[i-1])*(P[i] - P[i-1]));
+  return 100;
+}
 
 // ---------------------------------------------------------------- incoming
 function onStat(txt) {
@@ -298,7 +305,12 @@ function onStat(txt) {
     $("vFloor").textContent = j.f.toFixed(1); $("vMed").textContent = j.m.toFixed(1);
     $("vPeak").textContent = j.p.toFixed(1); $("vBusy").textContent = j.b + "/" + N;
     $("vPos").innerHTML = j.pa < 0 ? '<span style="color:#f85149">none</span>' : j.pa <= 5 ? '<span style="color:#3fb950">live</span>' : `<span style="color:#d29922">${j.pa}s old</span>`;
-    $("vRows").textContent = j.r; $("vFs").textContent = j.fs < 0 ? "err" : j.fs + "%";
+    $("vFs").textContent = (j.fs < 0 ? "err" : j.fs + "%") + " · " + j.r;
+    if (j.bv != null) {
+      const v = j.bv/1000, pct = battPct(v);
+      $("vBatt").innerHTML = pct < 0 ? '<span style="color:#8b949e">none</span>'
+        : `<span style="color:${pct <= 15 ? "#f85149" : pct <= 35 ? "#d29922" : "#3fb950"}">${pct}%</span> <span style="font-size:11px;color:#8b949e">${v.toFixed(2)}V</span>`;
+    }
     $("btnLog").textContent = j.lg ? "Pause logging" : "Resume logging";
     $("btnWifi").textContent = j.w ? "Board Wi-Fi: on" : "Board Wi-Fi: off";
     $("btnRadio").textContent = j.rs ? "Wake radio" : "Sleep radio";
